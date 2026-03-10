@@ -19,9 +19,11 @@ BIT_SAMPLES = 22050
 GAIN = 150.0
 ID_BITS = 16
 
+
 def get_pn_sequence(n, seed=42):
     np.random.seed(seed)
     return np.random.choice([-1, 1], size=n).astype(np.float32)
+
 
 # ---------------- VISUALIZATION FUNCTIONS ----------------
 
@@ -29,7 +31,7 @@ def plot_original_audio(samples):
 
     fig, ax = plt.subplots(figsize=(10,4))
 
-    ax.plot(samples[:5000])
+    ax.plot(samples[:50000])
     ax.set_title("Original Extracted Audio Signal")
     ax.set_xlabel("Sample Index")
     ax.set_ylabel("Amplitude")
@@ -43,7 +45,7 @@ def plot_watermarked_audio(samples):
 
     fig, ax = plt.subplots(figsize=(10,4))
 
-    ax.plot(samples[:5000])
+    ax.plot(samples[:50000])
     ax.set_title("DSSS Watermarked Audio Signal")
     ax.set_xlabel("Sample Index")
     ax.set_ylabel("Amplitude")
@@ -57,8 +59,8 @@ def plot_waveform_comparison(original, watermarked):
 
     fig, ax = plt.subplots(figsize=(10,4))
 
-    ax.plot(original[:5000], label="Original Audio")
-    ax.plot(watermarked[:5000], label="Watermarked Audio", alpha=0.7)
+    ax.plot(original[:50000], label="Original Audio")
+    ax.plot(watermarked[:50000], label="Watermarked Audio", alpha=0.7)
 
     ax.set_title("Waveform Comparison (Original vs Watermarked)")
     ax.set_xlabel("Sample Index")
@@ -74,19 +76,34 @@ def plot_correlation_detection(samples):
 
     pn = get_pn_sequence(BIT_SAMPLES)
 
-    segment = samples[:BIT_SAMPLES]
-    correlation = np.sum(segment * pn)
+    frame_size = ID_BITS * BIT_SAMPLES
+    num_frames = len(samples) // frame_size
 
-    fig, ax = plt.subplots(figsize=(6,3))
+    correlations = []
 
-    ax.bar(["Correlation Value"], [correlation])
+    for f in range(num_frames):
 
-    ax.set_title("Watermark Correlation Detection")
-    ax.set_ylabel("Correlation Strength")
+        start = f * frame_size
+        end = start + BIT_SAMPLES
+
+        seg = samples[start:end]
+
+        if len(seg) == BIT_SAMPLES:
+            corr = np.sum(seg * pn)
+            correlations.append(corr)
+
+    fig, ax = plt.subplots(figsize=(10,4))
+
+    ax.plot(correlations)
+
+    ax.set_title("Correlation Peaks for Watermark Detection")
+    ax.set_xlabel("Frame Index")
+    ax.set_ylabel("Correlation Value")
 
     plt.savefig("correlation_detection.png", dpi=300)
 
     st.pyplot(fig)
+
 
 # ---------------- DATABASE ----------------
 conn = sqlite3.connect(DB, check_same_thread=False)
@@ -109,6 +126,7 @@ uploaded_by INTEGER)
 """)
 
 conn.commit()
+
 
 # ---------------- WATERMARK CORE ----------------
 
@@ -178,6 +196,7 @@ def extract_watermark(samples):
 
     return max(set(all_recovered_ids), key=all_recovered_ids.count)
 
+
 # ---------------- FFMPEG ----------------
 
 def extract_audio(video, wav):
@@ -202,10 +221,12 @@ def merge_audio(video, wav, out):
         out
     ], check=True, capture_output=True)
 
+
 # ---------------- SESSION ----------------
 
 if "user" not in st.session_state:
     st.session_state.user = None
+
 
 # ---------------- LOGIN ----------------
 
@@ -259,13 +280,15 @@ if not st.session_state.user:
 
     st.stop()
 
+
 # ---------------- MAIN APP ----------------
 
 uid = st.session_state.user
 
 tabs = st.tabs(["🎧 Watermark","🔍 Detect","📂 Library","👥 Users","🚪 Logout"])
 
-# ---------------- WATERMARK TAB ----------------
+
+# ---------------- WATERMARK ----------------
 
 with tabs[0]:
 
@@ -304,18 +327,12 @@ with tabs[0]:
 
             merge_audio(in_vid, wm_wav, out_vid_path)
 
-            c.execute(
-                "INSERT INTO videos(filename,path,uploaded_by) VALUES(?,?,?)",
-                (vid.name,out_vid_path,uid)
-            )
-
-            conn.commit()
-
             st.success("Security Layer Applied!")
 
             st.video(out_vid_path)
 
-# ---------------- DETECTION TAB ----------------
+
+# ---------------- DETECTION ----------------
 
 with tabs[1]:
 
@@ -354,6 +371,7 @@ with tabs[1]:
 
                 st.success("No piracy signature detected.")
 
+
 # ---------------- LIBRARY ----------------
 
 with tabs[2]:
@@ -368,18 +386,16 @@ with tabs[2]:
 
     rows = c.fetchall()
 
-    if rows:
+    for vid_id, fname, fpath, uname in rows:
 
-        for vid_id, fname, fpath, uname in rows:
+        st.subheader(f"Video: {fname}")
+        st.write(f"🔐 Secured for User: {uname}")
 
-            st.subheader(f"Video: {fname}")
-            st.write(f"🔐 Secured for User: {uname}")
+        if os.path.exists(fpath):
+            st.video(fpath)
 
-            if os.path.exists(fpath):
+        st.divider()
 
-                st.video(fpath)
-
-            st.divider()
 
 # ---------------- USERS ----------------
 
@@ -394,6 +410,7 @@ with tabs[3]:
 
     st.dataframe(users, use_container_width=True)
 
+
 # ---------------- LOGOUT ----------------
 
 with tabs[4]:
@@ -402,5 +419,3 @@ with tabs[4]:
 
         st.session_state.user = None
         st.rerun()
-
-
