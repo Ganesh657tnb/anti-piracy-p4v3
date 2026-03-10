@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 
 # ---------------- CONFIG ----------------
 st.set_page_config("Guardian OTT: DSSS Anti-Piracy", layout="wide")
+
 DB = "users.db"
 VIDEO_DIR = "storage/videos"
 os.makedirs(VIDEO_DIR, exist_ok=True)
@@ -20,87 +21,59 @@ GAIN = 150.0
 ID_BITS = 16
 
 
+# ---------------- PN SEQUENCE ----------------
 def get_pn_sequence(n, seed=42):
     np.random.seed(seed)
     return np.random.choice([-1, 1], size=n).astype(np.float32)
 
 
-# ---------------- VISUALIZATION FUNCTIONS ----------------
+# ---------------- WAVEFORM VISUALIZATION ----------------
+def plot_waveform(original, watermarked, sr):
 
-def plot_original_audio(samples):
+    # normalize for plotting
+    original = original / np.max(np.abs(original))
+    watermarked = watermarked / np.max(np.abs(watermarked))
 
-    fig, ax = plt.subplots(figsize=(10,4))
+    # zoom window
+    N = 2000
 
-    ax.plot(samples[:50000])
-    ax.set_title("Original Extracted Audio Signal")
-    ax.set_xlabel("Sample Index")
-    ax.set_ylabel("Amplitude")
-
-    plt.savefig("original_audio_signal.png", dpi=300)
-
-    st.pyplot(fig)
-
-
-def plot_watermarked_audio(samples):
+    t = np.linspace(0, N/sr, N)
 
     fig, ax = plt.subplots(figsize=(10,4))
 
-    ax.plot(samples[:50000])
-    ax.set_title("DSSS Watermarked Audio Signal")
-    ax.set_xlabel("Sample Index")
-    ax.set_ylabel("Amplitude")
+    ax.plot(t, original[:N], label="Original Waveform")
+    ax.plot(t, watermarked[:N], label="Watermarked Waveform", alpha=0.7)
 
-    plt.savefig("watermarked_audio_signal.png", dpi=300)
-
-    st.pyplot(fig)
-
-
-def plot_waveform_comparison(original, watermarked):
-
-    fig, ax = plt.subplots(figsize=(10,4))
-
-    ax.plot(original[:50000], label="Original Audio")
-    ax.plot(watermarked[:50000], label="Watermarked Audio", alpha=0.7)
-
-    ax.set_title("Waveform Comparison (Original vs Watermarked)")
-    ax.set_xlabel("Sample Index")
+    ax.set_title("Audio Waveform (Zoomed View)")
+    ax.set_xlabel("Time (seconds)")
     ax.set_ylabel("Amplitude")
     ax.legend()
 
-    plt.savefig("waveform_comparison.png", dpi=300)
-
     st.pyplot(fig)
 
 
-def plot_correlation_detection(samples):
+# ---------------- CORRELATION GRAPH ----------------
+def plot_correlation(samples):
 
     pn = get_pn_sequence(BIT_SAMPLES)
 
-    frame_size = ID_BITS * BIT_SAMPLES
-    num_frames = len(samples) // frame_size
-
     correlations = []
 
-    for f in range(num_frames):
+    for i in range(0, len(samples)-BIT_SAMPLES, BIT_SAMPLES):
 
-        start = f * frame_size
-        end = start + BIT_SAMPLES
+        seg = samples[i:i+BIT_SAMPLES]
 
-        seg = samples[start:end]
+        corr = np.sum(seg * pn)
 
-        if len(seg) == BIT_SAMPLES:
-            corr = np.sum(seg * pn)
-            correlations.append(corr)
+        correlations.append(corr)
 
     fig, ax = plt.subplots(figsize=(10,4))
 
     ax.plot(correlations)
 
-    ax.set_title("Correlation Peaks for Watermark Detection")
+    ax.set_title("DSSS Correlation Detection")
     ax.set_xlabel("Frame Index")
     ax.set_ylabel("Correlation Value")
-
-    plt.savefig("correlation_detection.png", dpi=300)
 
     st.pyplot(fig)
 
@@ -128,33 +101,36 @@ uploaded_by INTEGER)
 conn.commit()
 
 
-# ---------------- WATERMARK CORE ----------------
-
+# ---------------- WATERMARK EMBED ----------------
 def embed_watermark(samples, user_id):
 
     samples = samples.astype(np.float32)
 
     bits = np.array(list(np.binary_repr(user_id, width=ID_BITS)), dtype=int)
-    bits = bits * 2 - 1
+
+    bits = bits*2 - 1
 
     pn = get_pn_sequence(BIT_SAMPLES)
 
     frame_size = ID_BITS * BIT_SAMPLES
+
     num_frames = len(samples) // frame_size
 
     for f in range(num_frames):
 
         for i, b in enumerate(bits):
 
-            start = (f * frame_size) + (i * BIT_SAMPLES)
+            start = f*frame_size + i*BIT_SAMPLES
             end = start + BIT_SAMPLES
 
             if end <= len(samples):
-                samples[start:end] += (b * pn * GAIN)
+
+                samples[start:end] += b * pn * GAIN
 
     return np.clip(samples, -32768, 32767).astype(np.int16)
 
 
+# ---------------- WATERMARK EXTRACT ----------------
 def extract_watermark(samples):
 
     samples = samples.astype(np.float32)
@@ -162,9 +138,10 @@ def extract_watermark(samples):
     pn = get_pn_sequence(BIT_SAMPLES)
 
     frame_size = ID_BITS * BIT_SAMPLES
+
     num_frames = len(samples) // frame_size
 
-    all_recovered_ids = []
+    recovered = []
 
     for f in range(num_frames):
 
@@ -172,40 +149,40 @@ def extract_watermark(samples):
 
         for i in range(ID_BITS):
 
-            start = (f * frame_size) + (i * BIT_SAMPLES)
+            start = f*frame_size + i*BIT_SAMPLES
             end = start + BIT_SAMPLES
 
             seg = samples[start:end]
 
-            correlation = np.sum(seg * pn)
+            corr = np.sum(seg * pn)
 
-            bits += "1" if correlation > 0 else "0"
+            bits += "1" if corr > 0 else "0"
 
         try:
 
-            recovered_id = int(bits, 2)
-
-            if recovered_id > 0:
-                all_recovered_ids.append(recovered_id)
+            recovered.append(int(bits,2))
 
         except:
-            continue
+            pass
 
-    if not all_recovered_ids:
+    if not recovered:
         return 0
 
-    return max(set(all_recovered_ids), key=all_recovered_ids.count)
+    return max(set(recovered), key=recovered.count)
 
 
 # ---------------- FFMPEG ----------------
-
 def extract_audio(video, wav):
 
     subprocess.run([
-        "ffmpeg","-y","-i",video,
-        "-vn","-ac","1","-ar","44100",
-        "-acodec","pcm_s16le",wav
-    ], check=True, capture_output=True)
+        "ffmpeg","-y",
+        "-i",video,
+        "-vn",
+        "-ac","1",
+        "-ar","44100",
+        "-acodec","pcm_s16le",
+        wav
+    ],capture_output=True)
 
 
 def merge_audio(video, wav, out):
@@ -217,48 +194,43 @@ def merge_audio(video, wav, out):
         "-c:v","copy",
         "-map","0:v:0",
         "-map","1:a:0",
-        "-b:a","192k",
         out
-    ], check=True, capture_output=True)
+    ],capture_output=True)
 
 
 # ---------------- SESSION ----------------
-
 if "user" not in st.session_state:
-    st.session_state.user = None
+    st.session_state.user=None
 
 
 # ---------------- LOGIN ----------------
-
 if not st.session_state.user:
 
-    st.title("🛡️ Guardian OTT Login")
+    st.title("Guardian OTT Login")
 
-    t1, t2 = st.tabs(["Login","Register"])
+    tab1, tab2 = st.tabs(["Login","Register"])
 
-    with t1:
+    with tab1:
 
         u = st.text_input("Username")
-        p = st.text_input("Password", type="password")
+        p = st.text_input("Password",type="password")
 
         if st.button("Login"):
 
-            c.execute("SELECT id FROM users WHERE username=? AND password=?", (u,p))
-            row = c.fetchone()
+            c.execute("SELECT id FROM users WHERE username=? AND password=?",(u,p))
 
-            if row:
+            r = c.fetchone()
 
-                st.session_state.user = row[0]
+            if r:
+                st.session_state.user=r[0]
                 st.rerun()
-
             else:
+                st.error("Invalid login")
 
-                st.error("Invalid Login")
-
-    with t2:
+    with tab2:
 
         ru = st.text_input("New Username")
-        rp = st.text_input("New Password", type="password")
+        rp = st.text_input("New Password",type="password")
         rph = st.text_input("Phone")
 
         if st.button("Register"):
@@ -266,156 +238,133 @@ if not st.session_state.user:
             try:
 
                 c.execute(
-                    "INSERT INTO users(username,password,phone) VALUES (?,?,?)",
-                    (ru,rp,rph)
-                )
+                "INSERT INTO users(username,password,phone) VALUES(?,?,?)",
+                (ru,rp,rph))
 
                 conn.commit()
 
-                st.success("Registration Successful!")
+                st.success("Registered")
 
             except:
-
-                st.error("User already exists")
+                st.error("User exists")
 
     st.stop()
 
 
 # ---------------- MAIN APP ----------------
-
 uid = st.session_state.user
 
-tabs = st.tabs(["🎧 Watermark","🔍 Detect","📂 Library","👥 Users","🚪 Logout"])
+tabs = st.tabs(["Watermark","Detect","Library","Users","Logout"])
 
 
 # ---------------- WATERMARK ----------------
-
 with tabs[0]:
 
     st.header("Apply DSSS Watermark")
 
-    vid = st.file_uploader("Upload Master Video", type=["mp4","mkv"])
+    vid = st.file_uploader("Upload Video",type=["mp4","mkv"])
 
     if vid and st.button("Protect Video"):
 
         with tempfile.TemporaryDirectory() as tmp:
 
-            in_vid = os.path.join(tmp, vid.name)
-            wav = os.path.join(tmp, "a.wav")
-            wm_wav = os.path.join(tmp, "wm.wav")
+            v = os.path.join(tmp,vid.name)
 
-            secure_filename = f"secured_u{uid}_{vid.name}"
-            out_vid_path = os.path.join(VIDEO_DIR, secure_filename)
+            wav = os.path.join(tmp,"a.wav")
 
-            open(in_vid,"wb").write(vid.read())
+            wm = os.path.join(tmp,"wm.wav")
 
-            extract_audio(in_vid, wav)
+            open(v,"wb").write(vid.read())
+
+            extract_audio(v,wav)
 
             sr, samples = wavfile.read(wav)
 
-            wm_samples = embed_watermark(samples, uid)
+            wm_samples = embed_watermark(samples,uid)
 
-            st.subheader("Audio Visualization")
+            st.subheader("Waveform")
 
-            plot_original_audio(samples)
+            plot_waveform(samples, wm_samples, sr)
 
-            plot_watermarked_audio(wm_samples)
+            wavfile.write(wm,sr,wm_samples)
 
-            plot_waveform_comparison(samples, wm_samples)
+            out = os.path.join(VIDEO_DIR,f"secured_{vid.name}")
 
-            wavfile.write(wm_wav, sr, wm_samples)
+            merge_audio(v,wm,out)
 
-            merge_audio(in_vid, wm_wav, out_vid_path)
+            c.execute(
+            "INSERT INTO videos(filename,path,uploaded_by) VALUES(?,?,?)",
+            (vid.name,out,uid))
 
-            st.success("Security Layer Applied!")
+            conn.commit()
 
-            st.video(out_vid_path)
+            st.success("Video Protected")
+
+            st.video(out)
 
 
-# ---------------- DETECTION ----------------
-
+# ---------------- DETECT ----------------
 with tabs[1]:
 
-    st.header("Identify Leak")
+    st.header("Detect Piracy")
 
-    leak_vid = st.file_uploader("Upload Pirated Clip", type=["mp4","mkv"], key="d")
+    v = st.file_uploader("Upload Suspicious Video",type=["mp4","mkv"],key="d")
 
-    if leak_vid and st.button("Run Deep Scan"):
+    if v and st.button("Scan"):
 
         with tempfile.TemporaryDirectory() as tmp:
 
-            v = os.path.join(tmp, leak_vid.name)
-            wav = os.path.join(tmp, "d.wav")
+            vid = os.path.join(tmp,v.name)
 
-            open(v,"wb").write(leak_vid.read())
+            wav = os.path.join(tmp,"d.wav")
 
-            extract_audio(v, wav)
+            open(vid,"wb").write(v.read())
+
+            extract_audio(vid,wav)
 
             sr, samples = wavfile.read(wav)
 
-            st.subheader("Detection Visualization")
+            st.subheader("Correlation Graph")
 
-            plot_correlation_detection(samples)
+            plot_correlation(samples)
 
             wid = extract_watermark(samples)
 
-            c.execute("SELECT username, phone FROM users WHERE id=?", (wid,))
-            user = c.fetchone()
+            c.execute("SELECT username,phone FROM users WHERE id=?",(wid,))
 
-            if user:
+            u = c.fetchone()
 
-                st.error(f"🚨 PIRACY DETECTED: User {user[0]} (ID: {wid})")
-                st.warning(f"Contact Info: {user[1]}")
-
+            if u:
+                st.error(f"Piracy by {u[0]} (ID {wid})")
+                st.warning(f"Phone: {u[1]}")
             else:
-
-                st.success("No piracy signature detected.")
+                st.success("No watermark detected")
 
 
 # ---------------- LIBRARY ----------------
-
 with tabs[2]:
 
-    st.header("Storage Vault")
+    rows = pd.read_sql_query(
+    """SELECT videos.filename,videos.path,users.username
+    FROM videos JOIN users ON users.id=videos.uploaded_by""",
+    conn)
 
-    c.execute("""
-        SELECT videos.id, videos.filename, videos.path, users.username
-        FROM videos
-        JOIN users ON users.id = videos.uploaded_by
-    """)
-
-    rows = c.fetchall()
-
-    for vid_id, fname, fpath, uname in rows:
-
-        st.subheader(f"Video: {fname}")
-        st.write(f"🔐 Secured for User: {uname}")
-
-        if os.path.exists(fpath):
-            st.video(fpath)
-
-        st.divider()
+    st.dataframe(rows)
 
 
 # ---------------- USERS ----------------
-
 with tabs[3]:
 
-    st.header("User Directory")
-
     users = pd.read_sql_query(
-        "SELECT id, username, phone FROM users",
-        conn
-    )
+    "SELECT id,username,phone FROM users",conn)
 
-    st.dataframe(users, use_container_width=True)
+    st.dataframe(users)
 
 
 # ---------------- LOGOUT ----------------
-
 with tabs[4]:
 
-    if st.button("Logout Session"):
+    if st.button("Logout"):
 
-        st.session_state.user = None
+        st.session_state.user=None
         st.rerun()
