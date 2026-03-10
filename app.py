@@ -16,7 +16,7 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 
 # ---------------- DSSS CONSTANTS ----------------
 BIT_SAMPLES = 22050
-GAIN = 150.0
+GAIN = 50.0
 ID_BITS = 16
 
 def get_pn_sequence(n, seed=42):
@@ -402,3 +402,4 @@ with tabs[4]:
 
         st.session_state.user = None
         st.rerun()
+
